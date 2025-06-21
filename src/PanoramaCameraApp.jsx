@@ -1,26 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Camera, RotateCcw, Download, Play, Square, Pause } from "lucide-react";
+import { Camera, RotateCcw, Download, Square, ArrowLeft } from "lucide-react";
 
 const PanoramaCameraApp = ({ onBack }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const panoramaCanvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const animationRef = useRef(null);
   const [stream, setStream] = useState(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [deviceOrientation, setDeviceOrientation] = useState({
-    alpha: 0,
-    beta: 0,
-    gamma: 0,
-  });
-  const [startAngle, setStartAngle] = useState(null);
-  const [currentPanoramaWidth, setCurrentPanoramaWidth] = useState(0);
-  const [recordingFrames, setRecordingFrames] = useState(0);
-  const [progress, setProgress] = useState(0);
+  const [isScanning, setIsScanning] = useState(false);
+  const [panoramaStrips, setPanoramaStrips] = useState([]);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [totalPanoramaWidth, setTotalPanoramaWidth] = useState(0);
   const [finalPanorama, setFinalPanorama] = useState(null);
-  const [lastCapturedAngle, setLastCapturedAngle] = useState(null);
-  const [captureInterval, setCaptureInterval] = useState(null);
-  const [panoramaHeight, setPanoramaHeight] = useState(480);
+  const [guidanceMessage, setGuidanceMessage] = useState("");
+  const [isComplete, setIsComplete] = useState(false);
 
   // Khởi tạo camera
   const startCamera = async () => {
@@ -36,490 +29,435 @@ const PanoramaCameraApp = ({ onBack }) => {
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
         setStream(mediaStream);
+        streamRef.current = mediaStream;
       }
     } catch (error) {
-      console.error("Lỗi khi truy cập camera:", error);
-      alert(
-        "Không thể truy cập camera. Vui lòng cho phép quyền truy cập camera."
-      );
+      console.error("Lỗi camera:", error);
+      alert("Không thể truy cập camera");
     }
   };
 
   // Dừng camera
   const stopCamera = () => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
       setStream(null);
     }
   };
 
-  // Theo dõi hướng thiết bị
-  useEffect(() => {
-    const handleOrientation = (event) => {
-      setDeviceOrientation({
-        alpha: event.alpha || 0,
-        beta: event.beta || 0,
-        gamma: event.gamma || 0,
-      });
-    };
+  // Capture vertical strip từ video
+  const captureVerticalStrip = useCallback(() => {
+    if (!videoRef.current || !canvasRef.current) return null;
 
-    if (window.DeviceOrientationEvent) {
-      window.addEventListener("deviceorientation", handleOrientation);
-      return () =>
-        window.removeEventListener("deviceorientation", handleOrientation);
-    }
-  }, []);
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
 
-  // Tính toán khoảng cách góc
-  const getAngleDifference = (angle1, angle2) => {
-    let diff = Math.abs(angle1 - angle2);
-    if (diff > 180) {
-      diff = 360 - diff;
-    }
-    return diff;
-  };
+    if (video.videoWidth === 0) return null;
 
-  // Khởi tạo panorama canvas
-  const initializePanoramaCanvas = () => {
-    const canvas = panoramaCanvasRef.current;
-    if (!canvas || !videoRef.current) return;
+    // Set canvas size tạm để capture
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
     const ctx = canvas.getContext("2d");
-    const video = videoRef.current;
+    ctx.drawImage(video, 0, 0);
 
-    // Tính toán kích thước panorama cho 360°
-    const videoAspectRatio = video.videoWidth / video.videoHeight;
-    const frameWidth = 320; // Width của mỗi frame trong panorama
-    const totalWidth = frameWidth * 36; // 360° / 10° per frame = 36 frames
+    // Extract vertical strip (độ rộng 10px)
+    const stripWidth = 8;
+    const stripCanvas = document.createElement("canvas");
+    stripCanvas.width = stripWidth;
+    stripCanvas.height = canvas.height;
 
-    canvas.width = totalWidth;
-    canvas.height = panoramaHeight;
-    setPanoramaHeight(panoramaHeight);
+    const stripCtx = stripCanvas.getContext("2d");
 
-    // Clear canvas với background
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Copy vertical strip từ giữa video
+    const centerX = Math.floor(canvas.width / 2) - Math.floor(stripWidth / 2);
+    stripCtx.drawImage(
+      canvas,
+      centerX,
+      0,
+      stripWidth,
+      canvas.height, // source
+      0,
+      0,
+      stripWidth,
+      canvas.height // destination
+    );
 
-    setCurrentPanoramaWidth(0);
-  };
+    return stripCanvas.toDataURL("image/jpeg", 0.8);
+  }, []);
 
-  // Capture frame vào panorama
-  const captureFrameToPanorama = useCallback(() => {
-    if (!videoRef.current || !panoramaCanvasRef.current || isPaused) return;
+  // Animation loop cho scanning
+  const scanLoop = useCallback(() => {
+    if (!isScanning) return;
 
-    const video = videoRef.current;
-    const panoramaCanvas = panoramaCanvasRef.current;
-    const tempCanvas = canvasRef.current;
+    // Capture strip từ video
+    const stripData = captureVerticalStrip();
 
-    if (!tempCanvas) return;
+    if (stripData) {
+      setPanoramaStrips((prev) => [...prev, stripData]);
+      setTotalPanoramaWidth((prev) => prev + 8); // Mỗi strip 8px
 
-    const ctx = panoramaCanvas.getContext("2d");
-    const tempCtx = tempCanvas.getContext("2d");
+      // Update progress
+      const newProgress = Math.min((totalPanoramaWidth / 2880) * 100, 100); // Target 360° ≈ 2880px
+      setScanProgress(newProgress);
 
-    // Capture current video frame
-    tempCanvas.width = video.videoWidth;
-    tempCanvas.height = video.videoHeight;
-    tempCtx.drawImage(video, 0, 0);
-
-    // Tính toán vị trí trong panorama
-    const currentAngle = deviceOrientation.alpha;
-    let angleDiff = 0;
-
-    if (lastCapturedAngle !== null) {
-      angleDiff = getAngleDifference(currentAngle, lastCapturedAngle);
-    }
-
-    // Chỉ thêm frame nếu đã xoay đủ góc (khoảng 2-3 độ)
-    if (lastCapturedAngle === null || angleDiff >= 2) {
-      const frameWidth = 320;
-      const frameHeight = panoramaHeight;
-
-      // Vẽ frame vào panorama
-      const xPosition = currentPanoramaWidth;
-
-      // Scale và vẽ video frame
-      ctx.drawImage(
-        tempCanvas,
-        0,
-        0,
-        tempCanvas.width,
-        tempCanvas.height,
-        xPosition,
-        0,
-        frameWidth,
-        frameHeight
-      );
-
-      setCurrentPanoramaWidth((prev) => prev + frameWidth);
-      setLastCapturedAngle(currentAngle);
-      setRecordingFrames((prev) => prev + 1);
-
-      // Tính progress dựa trên góc đã quét
-      if (startAngle !== null) {
-        let totalAngle = getAngleDifference(currentAngle, startAngle);
-        if (currentAngle < startAngle) totalAngle = 360 - totalAngle;
-        const progressPercent = Math.min((totalAngle / 360) * 100, 100);
-        setProgress(progressPercent);
-
-        // Tự động dừng khi hoàn thành 360°
-        if (progressPercent >= 95) {
-          stopRecording();
-        }
+      // Update guidance
+      if (newProgress < 25) {
+        setGuidanceMessage("🟡 Tiếp tục xoay chậm rãi...");
+      } else if (newProgress < 50) {
+        setGuidanceMessage("🟠 Đã được 1/4, tiếp tục...");
+      } else if (newProgress < 75) {
+        setGuidanceMessage("🟠 Đã được 1/2, tiếp tục...");
+      } else if (newProgress < 95) {
+        setGuidanceMessage("🟢 Sắp xong rồi!");
+      } else {
+        setGuidanceMessage("🎉 Hoàn thành!");
+        completePanorama();
+        return;
       }
     }
-  }, [
-    deviceOrientation.alpha,
-    lastCapturedAngle,
-    currentPanoramaWidth,
-    startAngle,
-    isPaused,
-  ]);
 
-  // Bắt đầu recording panorama
-  const startRecording = () => {
-    if (!videoRef.current) return;
+    // Continue animation
+    animationRef.current = requestAnimationFrame(scanLoop);
+  }, [isScanning, totalPanoramaWidth, captureVerticalStrip]);
 
-    setIsRecording(true);
-    setIsPaused(false);
-    setStartAngle(deviceOrientation.alpha);
-    setLastCapturedAngle(null);
-    setProgress(0);
-    setRecordingFrames(0);
-
-    initializePanoramaCanvas();
-
-    // Capture frames với tần suất cao
-    const interval = setInterval(captureFrameToPanorama, 100); // 10 FPS
-    setCaptureInterval(interval);
-  };
-
-  // Dừng recording
-  const stopRecording = () => {
-    setIsRecording(false);
-    setIsPaused(false);
-
-    if (captureInterval) {
-      clearInterval(captureInterval);
-      setCaptureInterval(null);
+  // Bắt đầu quét panorama
+  const startPanoramaScan = () => {
+    if (!videoRef.current || videoRef.current.videoWidth === 0) {
+      alert("Vui lòng đợi camera khởi động xong");
+      return;
     }
 
-    // Tạo final panorama
-    finalizePanorama();
+    setIsScanning(true);
+    setIsComplete(false);
+    setPanoramaStrips([]);
+    setScanProgress(0);
+    setTotalPanoramaWidth(0);
+    setFinalPanorama(null);
+    setGuidanceMessage("🔵 Bắt đầu xoay từ từ sang phải...");
+
+    // Start animation loop
+    animationRef.current = requestAnimationFrame(scanLoop);
   };
 
-  // Pause/Resume recording
-  const togglePause = () => {
-    setIsPaused(!isPaused);
+  // Dừng quét
+  const stopPanoramaScan = () => {
+    setIsScanning(false);
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+    }
+    completePanorama();
   };
 
-  // Tạo panorama cuối cùng
-  const finalizePanorama = () => {
-    const canvas = panoramaCanvasRef.current;
-    if (!canvas) return;
+  // Hoàn thành panorama
+  const completePanorama = () => {
+    setIsScanning(false);
+    setIsComplete(true);
 
-    // Crop panorama to actual width
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+    }
+
+    // Tạo panorama cuối cùng
+    if (panoramaStrips.length > 0) {
+      stitchFinalPanorama();
+    }
+  };
+
+  // Ghép các strips thành panorama hoàn chỉnh
+  const stitchFinalPanorama = async () => {
+    if (panoramaStrips.length === 0) return;
+
     const finalCanvas = document.createElement("canvas");
-    const finalCtx = finalCanvas.getContext("2d");
+    const ctx = finalCanvas.getContext("2d");
 
-    finalCanvas.width = currentPanoramaWidth;
-    finalCanvas.height = panoramaHeight;
+    // Set kích thước canvas cuối cùng
+    finalCanvas.width = panoramaStrips.length * 8; // Mỗi strip 8px
+    finalCanvas.height = 400; // Fixed height
 
-    finalCtx.drawImage(
-      canvas,
-      0,
-      0,
-      currentPanoramaWidth,
-      panoramaHeight,
-      0,
-      0,
-      currentPanoramaWidth,
-      panoramaHeight
-    );
+    // Vẽ từng strip
+    for (let i = 0; i < panoramaStrips.length; i++) {
+      const img = new Image();
+      img.src = panoramaStrips[i];
+
+      await new Promise((resolve) => {
+        img.onload = () => {
+          ctx.drawImage(img, i * 8, 0, 8, finalCanvas.height);
+          resolve();
+        };
+      });
+    }
 
     const panoramaData = finalCanvas.toDataURL("image/jpeg", 0.9);
     setFinalPanorama(panoramaData);
   };
 
-  // Reset tất cả
+  // Reset
   const resetPanorama = () => {
-    setIsRecording(false);
-    setIsPaused(false);
-    setStartAngle(null);
-    setLastCapturedAngle(null);
-    setProgress(0);
-    setRecordingFrames(0);
-    setCurrentPanoramaWidth(0);
+    setIsScanning(false);
+    setIsComplete(false);
+    setPanoramaStrips([]);
+    setScanProgress(0);
+    setTotalPanoramaWidth(0);
     setFinalPanorama(null);
+    setGuidanceMessage("");
 
-    if (captureInterval) {
-      clearInterval(captureInterval);
-      setCaptureInterval(null);
-    }
-
-    // Clear panorama canvas
-    const canvas = panoramaCanvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
     }
   };
 
-  // Download panorama
+  // Download
   const downloadPanorama = () => {
     if (!finalPanorama) return;
-
     const link = document.createElement("a");
     link.href = finalPanorama;
     link.download = `panorama-360-${Date.now()}.jpg`;
     link.click();
   };
 
-  // Tính toán speed recommendation
-  const getSpeedRecommendation = () => {
-    if (!isRecording) return "";
-
-    const currentAngle = deviceOrientation.alpha;
-    if (lastCapturedAngle === null) return "Bắt đầu xoay từ từ...";
-
-    const angleDiff = getAngleDifference(currentAngle, lastCapturedAngle);
-
-    if (angleDiff < 1) return "🐌 Xoay nhanh hơn";
-    if (angleDiff > 5) return "🏃 Xoay chậm lại";
-    return "✅ Tốc độ hoàn hảo";
-  };
-
   useEffect(() => {
     startCamera();
     return () => {
       stopCamera();
-      if (captureInterval) clearInterval(captureInterval);
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
     };
   }, []);
 
+  // Update scan loop when scanning state changes
+  useEffect(() => {
+    if (isScanning && !animationRef.current) {
+      animationRef.current = requestAnimationFrame(scanLoop);
+    }
+  }, [isScanning, scanLoop]);
+
   return (
-    <div className="min-vh-100 bg-dark text-white">
+    <div className="min-vh-100 bg-black text-white position-relative">
       {/* Header */}
-      <div className="bg-secondary p-3">
+      <div className="position-absolute top-0 start-0 end-0 z-3 p-3">
         <div className="d-flex align-items-center justify-content-between">
           {onBack && (
             <button onClick={onBack} className="btn btn-outline-light btn-sm">
-              ← Về trang chính
+              <ArrowLeft size={16} />
             </button>
           )}
-          <h1 className="h5 mb-0 d-flex align-items-center mx-auto">
-            <Camera className="me-2" size={20} />
-            Panorama 360° Live
-          </h1>
-          <div style={{ width: "100px" }}></div>
+          <h1 className="h6 mb-0 text-center flex-grow-1">PANORAMA</h1>
+          <div style={{ width: "60px" }}></div>
         </div>
       </div>
 
-      {/* Camera View */}
-      <div className="position-relative">
+      {/* Camera Viewfinder - Full screen */}
+      <div className="position-relative w-100 vh-100">
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className="w-100"
-          style={{ height: "300px", objectFit: "cover" }}
+          className="w-100 h-100 object-fit-cover"
         />
 
-        {/* Recording Overlay */}
+        {/* Panorama Guide Overlay */}
         <div
-          className="position-absolute top-0 start-0 w-100 h-100"
+          className="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
           style={{ pointerEvents: "none" }}
         >
-          {/* Progress và hướng dẫn */}
-          <div className="position-absolute top-0 start-50 translate-middle-x mt-2">
-            <div className="bg-dark bg-opacity-75 px-3 py-2 rounded text-center">
-              {isRecording ? (
-                <div>
-                  <div className="d-flex align-items-center justify-content-center mb-1">
-                    <span className="badge bg-danger me-2">🔴 REC</span>
-                    <div
-                      className="progress me-2"
-                      style={{ width: "120px", height: "8px" }}
-                    >
-                      <div
-                        className="progress-bar bg-success"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                    <small>{Math.round(progress)}%</small>
-                  </div>
-                  <small className="text-warning">
-                    {getSpeedRecommendation()}
-                  </small>
-                </div>
-              ) : (
-                <small className="text-info">
-                  📱 Giữ thiết bị ngang, nhấn REC và xoay 360°
-                </small>
-              )}
-            </div>
-          </div>
+          {/* Center Guide Line */}
+          <div
+            className="position-absolute bg-warning opacity-75"
+            style={{
+              width: "3px",
+              height: "60%",
+              left: "50%",
+              top: "20%",
+              transform: "translateX(-50%)",
+              boxShadow: "0 0 10px rgba(255,193,7,0.8)",
+            }}
+          />
 
-          {/* Compass indicator */}
-          <div className="position-absolute top-0 end-0 mt-2 me-2">
-            <div
-              className="bg-dark bg-opacity-75 rounded-circle d-flex align-items-center justify-content-center"
-              style={{ width: "60px", height: "60px" }}
-            >
-              <div className="text-center">
-                <small style={{ fontSize: "10px" }}>
-                  {Math.round(deviceOrientation.alpha)}°
-                </small>
+          {/* Scanning Area Indicator */}
+          {isScanning && (
+            <div className="position-absolute">
+              <div
+                className="bg-success opacity-50 animate-pulse"
+                style={{
+                  width: "20px",
+                  height: "60%",
+                  marginLeft: "-10px",
+                  borderRadius: "10px",
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Progress Bar - Top */}
+        {isScanning && (
+          <div className="position-absolute top-0 start-0 end-0 mt-5 pt-3">
+            <div className="mx-3">
+              <div
+                className="progress bg-dark bg-opacity-50"
+                style={{ height: "6px" }}
+              >
                 <div
-                  className={`bg-${
-                    isRecording ? "danger" : "light"
-                  } rounded-pill mx-auto`}
-                  style={{
-                    width: "3px",
-                    height: "20px",
-                    transform: `rotate(${deviceOrientation.alpha}deg)`,
-                    transformOrigin: "bottom center",
-                  }}
+                  className="progress-bar bg-warning"
+                  style={{ width: `${scanProgress}%` }}
                 />
               </div>
             </div>
           </div>
+        )}
 
-          {/* Recording indicator center */}
-          {isRecording && (
-            <div className="position-absolute top-50 start-50 translate-middle">
-              <div className="text-center">
+        {/* Guidance Message */}
+        <div className="position-absolute bottom-0 start-0 end-0 mb-5 pb-5">
+          <div className="text-center">
+            <div className="bg-dark bg-opacity-75 d-inline-block px-4 py-2 rounded-pill">
+              <div className="fw-bold mb-1">
+                {scanProgress > 0 && `${Math.round(scanProgress)}%`}
+              </div>
+              <div className="small">
+                {guidanceMessage ||
+                  (isScanning
+                    ? "🔵 Xoay chậm rãi sang phải"
+                    : "📱 Sẵn sàng chụp panorama 360°")}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Live Panorama Strip Preview */}
+        {isScanning && panoramaStrips.length > 0 && (
+          <div className="position-absolute bottom-0 start-0 end-0 mb-2">
+            <div className="px-3">
+              <div className="bg-dark bg-opacity-75 rounded p-2">
                 <div
-                  className={`bg-danger rounded-circle d-flex align-items-center justify-content-center mb-2 mx-auto ${
-                    isPaused ? "" : "animate-pulse"
-                  }`}
-                  style={{ width: "40px", height: "40px" }}
+                  className="d-flex overflow-hidden"
+                  style={{ height: "40px" }}
                 >
-                  <span style={{ fontSize: "16px" }}>🎥</span>
-                </div>
-                <div className="bg-dark bg-opacity-75 px-2 py-1 rounded-pill">
-                  <small className="text-white">
-                    {isPaused ? "⏸️ Tạm dừng" : "Đang quay..."}
-                  </small>
+                  {panoramaStrips.slice(-50).map((strip, index) => (
+                    <img
+                      key={index}
+                      src={strip}
+                      alt=""
+                      style={{
+                        width: "8px",
+                        height: "40px",
+                        objectFit: "cover",
+                        flex: "none",
+                      }}
+                    />
+                  ))}
                 </div>
               </div>
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* Live Panorama Preview */}
-      {isRecording && currentPanoramaWidth > 0 && (
-        <div className="p-2 bg-secondary">
-          <div className="text-center mb-2">
-            <small className="text-muted">📷 Panorama Live Preview</small>
-          </div>
-          <div className="bg-dark rounded p-2" style={{ overflowX: "auto" }}>
-            <canvas
-              ref={panoramaCanvasRef}
-              className="border border-secondary rounded"
-              style={{
-                height: "80px",
-                width: "auto",
-                maxWidth: "none",
-                imageRendering: "crisp-edges",
-              }}
-            />
-          </div>
-          <div className="text-center mt-1">
-            <small className="text-muted">
-              {recordingFrames} frames • {Math.round(currentPanoramaWidth)}px
-              width
-            </small>
-          </div>
-        </div>
-      )}
-
-      {/* Controls */}
-      <div className="p-3">
-        <div className="row g-2">
-          {!isRecording ? (
-            <>
-              <div className="col-8">
-                <button
-                  onClick={startRecording}
-                  className="btn btn-danger w-100 d-flex align-items-center justify-content-center fw-bold py-3"
-                >
-                  <Camera className="me-2" size={24} />
-                  🔴 Bắt đầu Panorama
-                </button>
-              </div>
-              <div className="col-4">
-                <button
-                  onClick={resetPanorama}
-                  className="btn btn-outline-secondary w-100 py-3"
-                  disabled={!finalPanorama}
-                >
-                  <RotateCcw size={20} />
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="col-4">
-                <button
-                  onClick={togglePause}
-                  className={`btn w-100 py-3 ${
-                    isPaused ? "btn-success" : "btn-warning"
-                  }`}
-                >
-                  {isPaused ? <Play size={20} /> : <Pause size={20} />}
-                </button>
-              </div>
-              <div className="col-8">
-                <button
-                  onClick={stopRecording}
-                  className="btn btn-success w-100 d-flex align-items-center justify-content-center fw-bold py-3"
-                >
-                  <Square className="me-2" size={20} />✅ Hoàn thành (
-                  {Math.round(progress)}%)
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Download Final Panorama */}
-        {finalPanorama && (
-          <div className="mt-3">
-            <button
-              onClick={downloadPanorama}
-              className="btn btn-primary w-100 d-flex align-items-center justify-content-center fw-bold py-3"
-            >
-              <Download className="me-2" size={20} />
-              📁 Tải xuống Panorama 360°
-            </button>
           </div>
         )}
       </div>
 
-      {/* Final Result Preview */}
+      {/* Bottom Controls */}
+      <div className="position-absolute bottom-0 start-0 end-0 p-4 bg-gradient-dark">
+        <div className="d-flex align-items-center justify-content-center gap-4">
+          {/* Reset Button */}
+          <button
+            onClick={resetPanorama}
+            className="btn btn-outline-light rounded-circle"
+            style={{ width: "50px", height: "50px" }}
+            disabled={!finalPanorama && !isScanning}
+          >
+            <RotateCcw size={20} />
+          </button>
+
+          {/* Main Capture Button */}
+          <button
+            onClick={isScanning ? stopPanoramaScan : startPanoramaScan}
+            disabled={!stream}
+            className={`btn rounded-circle d-flex align-items-center justify-content-center ${
+              isScanning ? "btn-danger" : "btn-light"
+            }`}
+            style={{ width: "80px", height: "80px" }}
+          >
+            {isScanning ? (
+              <Square size={30} />
+            ) : (
+              <Camera size={30} className="text-dark" />
+            )}
+          </button>
+
+          {/* Download Button */}
+          <button
+            onClick={downloadPanorama}
+            className="btn btn-outline-light rounded-circle"
+            style={{ width: "50px", height: "50px" }}
+            disabled={!finalPanorama}
+          >
+            <Download size={20} />
+          </button>
+        </div>
+
+        {/* Status Text */}
+        <div className="text-center mt-3">
+          <small className="text-muted">
+            {!stream
+              ? "Đang kết nối camera..."
+              : isScanning
+              ? `Đang quét... ${panoramaStrips.length} strips`
+              : isComplete
+              ? "✅ Hoàn thành panorama!"
+              : "📷 Nhấn để bắt đầu panorama 360°"}
+          </small>
+        </div>
+      </div>
+
+      {/* Final Result Modal */}
       {finalPanorama && (
-        <div className="p-3 border-top border-secondary">
-          <h6 className="mb-2">🎉 Panorama 360° hoàn thành!</h6>
-          <div className="bg-secondary rounded p-2">
-            <img
-              src={finalPanorama}
-              alt="Panorama 360°"
-              className="w-100 rounded"
-              style={{ height: "120px", objectFit: "cover" }}
-            />
-          </div>
-          <div className="text-center mt-2">
-            <small className="text-muted">
-              Kích thước: {currentPanoramaWidth}px × {panoramaHeight}px
-            </small>
+        <div className="position-fixed top-0 start-0 w-100 h-100 bg-dark bg-opacity-90 d-flex align-items-center justify-content-center z-3">
+          <div
+            className="bg-white rounded p-3 m-3 text-dark w-100"
+            style={{ maxWidth: "500px" }}
+          >
+            <h5 className="mb-3 text-center">🎉 Panorama 360° hoàn thành!</h5>
+            <div className="mb-3">
+              <img
+                src={finalPanorama}
+                alt="Panorama"
+                className="w-100 rounded"
+                style={{ height: "150px", objectFit: "cover" }}
+              />
+            </div>
+            <div className="d-flex gap-2">
+              <button
+                onClick={downloadPanorama}
+                className="btn btn-primary flex-fill"
+              >
+                📁 Tải xuống
+              </button>
+              <button
+                onClick={() => setFinalPanorama(null)}
+                className="btn btn-secondary"
+              >
+                Đóng
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Hidden canvas for frame processing */}
+      {/* Hidden canvas */}
       <canvas ref={canvasRef} className="d-none" />
+
+      <style>{`
+        .bg-gradient-dark {
+          background: linear-gradient(transparent, rgba(0,0,0,0.8));
+        }
+        .object-fit-cover {
+          object-fit: cover;
+        }
+        .z-3 {
+          z-index: 3;
+        }
+      `}</style>
     </div>
   );
 };

@@ -151,7 +151,7 @@ const App = () => {
       </Routes>
 
       {/* Custom CSS để tạo hiệu ứng hover */}
-      <style jsx>{`
+      <style>{`
         .hover-card {
           transition: all 0.3s ease;
           cursor: pointer;
