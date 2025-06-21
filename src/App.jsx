@@ -1,10 +1,9 @@
-import React from "react";
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 import { Camera, Eye, Globe, Home, ArrowLeft } from "lucide-react";
 
 import SkyBox from "./SkyBox.jsx";
 import Pannellum from "./Pannellum.jsx";
-import PanoramaCameraApp from "./PanoramaCameraApp.jsx";
+import ObjectScannerApp from "./ObjectScannerApp.jsx";
 
 // Sử dụng component PanoramaCameraApp đã có
 
@@ -141,7 +140,7 @@ const App = () => {
         <Route path="/" element={<HomePage />} />
 
         {/* Route cho Camera App */}
-        <Route path="/camera" element={<PanoramaCameraApp />} />
+        <Route path="/camera" element={<ObjectScannerApp />} />
 
         {/* Route cho Pannellum */}
         <Route path="/pannellum" element={<Pannellum />} />
