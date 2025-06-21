@@ -26,6 +26,12 @@ const PanoramaCameraApp = () => {
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [finalPanorama, setFinalPanorama] = useState(null);
+  const [recommendedAngles] = useState([
+    0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330,
+  ]);
+  const [capturedAngles, setCapturedAngles] = useState([]);
+  const [nextRecommendedAngle, setNextRecommendedAngle] = useState(0);
+  const [angleProgress, setAngleProgress] = useState(0);
 
   // Khởi tạo camera
   const startCamera = async () => {
@@ -61,11 +67,15 @@ const PanoramaCameraApp = () => {
   // Theo dõi hướng thiết bị (gyroscope)
   useEffect(() => {
     const handleOrientation = (event) => {
-      setDeviceOrientation({
+      const newOrientation = {
         alpha: event.alpha || 0, // Góc quay quanh trục Z (0-360)
         beta: event.beta || 0, // Góc nghiêng trước sau (-180 đến 180)
         gamma: event.gamma || 0, // Góc nghiêng trái phải (-90 đến 90)
-      });
+      };
+      setDeviceOrientation(newOrientation);
+
+      // Tính toán góc tiếp theo được đề xuất
+      updateRecommendedAngle(newOrientation.alpha);
     };
 
     if (window.DeviceOrientationEvent) {
@@ -73,7 +83,80 @@ const PanoramaCameraApp = () => {
       return () =>
         window.removeEventListener("deviceorientation", handleOrientation);
     }
-  }, []);
+  }, [capturedAngles]);
+
+  // Cập nhật góc đề xuất tiếp theo
+  const updateRecommendedAngle = (currentAlpha) => {
+    const currentAngle = Math.round(currentAlpha);
+
+    // Tìm góc chưa chụp gần nhất
+    const unCapturedAngles = recommendedAngles.filter(
+      (angle) =>
+        !capturedAngles.some((captured) => Math.abs(captured - angle) <= 15)
+    );
+
+    if (unCapturedAngles.length > 0) {
+      // Tìm góc gần nhất với vị trí hiện tại
+      const nextAngle = unCapturedAngles.reduce((closest, angle) => {
+        const currentDistance = Math.min(
+          Math.abs(currentAngle - angle),
+          Math.abs(currentAngle - angle + 360),
+          Math.abs(currentAngle - angle - 360)
+        );
+        const closestDistance = Math.min(
+          Math.abs(currentAngle - closest),
+          Math.abs(currentAngle - closest + 360),
+          Math.abs(currentAngle - closest - 360)
+        );
+        return currentDistance < closestDistance ? angle : closest;
+      });
+
+      setNextRecommendedAngle(nextAngle);
+    }
+
+    // Tính toán progress
+    const progress = (capturedAngles.length / recommendedAngles.length) * 100;
+    setAngleProgress(progress);
+  };
+
+  // Kiểm tra xem góc hiện tại có phù hợp để chụp không
+  const isGoodAngleToCapture = () => {
+    const currentAngle = Math.round(deviceOrientation.alpha);
+    const tolerance = 15; // Dung sai 15 độ
+
+    return recommendedAngles.some(
+      (recommendedAngle) =>
+        Math.abs(currentAngle - recommendedAngle) <= tolerance &&
+        !capturedAngles.some(
+          (captured) => Math.abs(captured - recommendedAngle) <= tolerance
+        )
+    );
+  };
+
+  // Lấy góc gần nhất chưa chụp
+  const getNearestUnCapturedAngle = () => {
+    const currentAngle = Math.round(deviceOrientation.alpha);
+    const unCapturedAngles = recommendedAngles.filter(
+      (angle) =>
+        !capturedAngles.some((captured) => Math.abs(captured - angle) <= 15)
+    );
+
+    if (unCapturedAngles.length === 0) return null;
+
+    return unCapturedAngles.reduce((closest, angle) => {
+      const currentDistance = Math.min(
+        Math.abs(currentAngle - angle),
+        Math.abs(currentAngle - angle + 360),
+        Math.abs(currentAngle - angle - 360)
+      );
+      const closestDistance = Math.min(
+        Math.abs(currentAngle - closest),
+        Math.abs(currentAngle - closest + 360),
+        Math.abs(currentAngle - closest - 360)
+      );
+      return currentDistance < closestDistance ? angle : closest;
+    });
+  };
 
   // Chụp ảnh đơn lẻ
   const captureFrame = useCallback(() => {
@@ -95,13 +178,15 @@ const PanoramaCameraApp = () => {
   const handleManualCapture = () => {
     const imageData = captureFrame();
     if (imageData) {
+      const currentAngle = Math.round(deviceOrientation.alpha);
       const newImage = {
         id: Date.now(),
         data: imageData,
-        angle: Math.round(deviceOrientation.alpha),
+        angle: currentAngle,
         timestamp: new Date().toISOString(),
       };
       setCapturedImages((prev) => [...prev, newImage]);
+      setCapturedAngles((prev) => [...prev, currentAngle]);
     }
   };
 
@@ -109,15 +194,20 @@ const PanoramaCameraApp = () => {
   const startAutoCapture = () => {
     setIsCapturing(true);
     const interval = setInterval(() => {
-      const imageData = captureFrame();
-      if (imageData) {
-        const newImage = {
-          id: Date.now(),
-          data: imageData,
-          angle: Math.round(deviceOrientation.alpha),
-          timestamp: new Date().toISOString(),
-        };
-        setCapturedImages((prev) => [...prev, newImage]);
+      // Chỉ chụp nếu đang ở góc phù hợp
+      if (isGoodAngleToCapture()) {
+        const imageData = captureFrame();
+        if (imageData) {
+          const currentAngle = Math.round(deviceOrientation.alpha);
+          const newImage = {
+            id: Date.now(),
+            data: imageData,
+            angle: currentAngle,
+            timestamp: new Date().toISOString(),
+          };
+          setCapturedImages((prev) => [...prev, newImage]);
+          setCapturedAngles((prev) => [...prev, currentAngle]);
+        }
       }
     }, 1000); // Chụp mỗi giây
 
@@ -136,7 +226,9 @@ const PanoramaCameraApp = () => {
   // Xóa tất cả ảnh đã chụp
   const clearImages = () => {
     setCapturedImages([]);
+    setCapturedAngles([]);
     setFinalPanorama(null);
+    setAngleProgress(0);
   };
 
   // Ghép ảnh panorama (đơn giản - xếp ngang)
@@ -208,6 +300,61 @@ const PanoramaCameraApp = () => {
     link.click();
   };
 
+  // Tải xuống ảnh đơn lẻ
+  const downloadSingleImage = (imageData, angle, index) => {
+    const link = document.createElement("a");
+    link.href = imageData;
+    link.download = `panorama-frame-${index + 1}-${angle}deg-${Date.now()}.jpg`;
+    link.click();
+  };
+
+  // Tải xuống tất cả ảnh đã chụp
+  const downloadAllImages = () => {
+    if (capturedImages.length === 0) return;
+
+    capturedImages.forEach((img, index) => {
+      setTimeout(() => {
+        downloadSingleImage(img.data, img.angle, index);
+      }, index * 100); // Delay giữa các download
+    });
+  };
+
+  // Lưu vào IndexedDB (local storage lớn hơn)
+  const saveToIndexedDB = async () => {
+    try {
+      // Mở IndexedDB
+      const request = indexedDB.open("PanoramaApp", 1);
+
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains("images")) {
+          db.createObjectStore("images", { keyPath: "id" });
+        }
+      };
+
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(["images"], "readwrite");
+        const store = transaction.objectStore("images");
+
+        capturedImages.forEach((img) => {
+          store.put({
+            id: img.id,
+            data: img.data,
+            angle: img.angle,
+            timestamp: img.timestamp,
+          });
+        });
+
+        transaction.oncomplete = () => {
+          alert(`Đã lưu ${capturedImages.length} ảnh vào storage!`);
+        };
+      };
+    } catch (error) {
+      console.error("Lỗi lưu vào IndexedDB:", error);
+    }
+  };
+
   useEffect(() => {
     startCamera();
     return () => {
@@ -231,6 +378,9 @@ const PanoramaCameraApp = () => {
             Panorama 360°
           </h1>
           <div className="d-flex align-items-center">
+            <small className="text-muted me-3">
+              {capturedImages.length}/{recommendedAngles.length} ảnh
+            </small>
             <small className="text-muted">
               Góc: {Math.round(deviceOrientation.alpha)}°
             </small>
@@ -318,10 +468,15 @@ const PanoramaCameraApp = () => {
             {panoramaMode === "manual" ? (
               <button
                 onClick={handleManualCapture}
-                className="btn btn-danger w-100 d-flex align-items-center justify-content-center fw-bold"
+                disabled={!isGoodAngleToCapture() && capturedImages.length > 0}
+                className={`btn w-100 d-flex align-items-center justify-content-center fw-bold ${
+                  isGoodAngleToCapture() ? "btn-success" : "btn-danger"
+                }`}
               >
                 <Camera className="me-2" size={20} />
-                Chụp ({capturedImages.length})
+                {isGoodAngleToCapture()
+                  ? "📷 Chụp ngay!"
+                  : `Chụp (${capturedImages.length})`}
               </button>
             ) : (
               <button
@@ -350,6 +505,96 @@ const PanoramaCameraApp = () => {
             </button>
           </div>
         </div>
+
+        {/* Angle Guide */}
+        <div className="mb-3">
+          <div className="card bg-secondary">
+            <div className="card-body p-3">
+              <h6 className="card-title mb-2 d-flex align-items-center">
+                🧭 Hướng dẫn góc chụp
+              </h6>
+
+              {/* Progress bar tổng quan */}
+              <div className="mb-3">
+                <div className="d-flex justify-content-between align-items-center mb-1">
+                  <small>Tiến độ hoàn thành</small>
+                  <small>
+                    {capturedImages.length}/{recommendedAngles.length}
+                  </small>
+                </div>
+                <div className="progress">
+                  <div
+                    className="progress-bar bg-success"
+                    style={{ width: `${angleProgress}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Grid góc chụp */}
+              <div className="row g-1">
+                {recommendedAngles.map((angle, index) => {
+                  const isCaptured = capturedAngles.some(
+                    (captured) => Math.abs(captured - angle) <= 15
+                  );
+                  const isNext = angle === getNearestUnCapturedAngle();
+
+                  return (
+                    <div key={index} className="col-3 col-md-2">
+                      <div
+                        className={`text-center p-1 rounded small ${
+                          isCaptured
+                            ? "bg-success text-white"
+                            : isNext
+                            ? "bg-warning text-dark"
+                            : "bg-dark text-muted"
+                        }`}
+                        style={{ fontSize: "11px" }}
+                      >
+                        {isCaptured ? "✅" : isNext ? "🎯" : "⭕"} {angle}°
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Hướng dẫn tiếp theo */}
+              {getNearestUnCapturedAngle() !== null && (
+                <div className="mt-2 text-center">
+                  <small className="text-warning">
+                    <strong>
+                      Tiếp theo: Xoay đến {getNearestUnCapturedAngle()}°
+                    </strong>
+                  </small>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Download All Images */}
+        {capturedImages.length > 0 && (
+          <div className="mb-3">
+            <div className="row g-2">
+              <div className="col-6">
+                <button
+                  onClick={downloadAllImages}
+                  className="btn btn-info w-100 d-flex align-items-center justify-content-center"
+                >
+                  <Download className="me-2" size={16} />
+                  Tải tất cả ảnh
+                </button>
+              </div>
+              <div className="col-6">
+                <button
+                  onClick={saveToIndexedDB}
+                  className="btn btn-secondary w-100 d-flex align-items-center justify-content-center"
+                >
+                  💾 Lưu local
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Process Panorama */}
         {capturedImages.length >= 2 && (
@@ -384,8 +629,11 @@ const PanoramaCameraApp = () => {
         <div className="p-3 border-top border-secondary">
           <h6 className="mb-2">Ảnh đã chụp ({capturedImages.length})</h6>
           <div className="d-flex gap-2 overflow-auto">
-            {capturedImages.map((img) => (
-              <div key={img.id} className="flex-shrink-0 text-center">
+            {capturedImages.map((img, index) => (
+              <div
+                key={img.id}
+                className="flex-shrink-0 text-center position-relative"
+              >
                 <img
                   src={img.data}
                   alt={`Frame ${img.id}`}
@@ -393,6 +641,17 @@ const PanoramaCameraApp = () => {
                   style={{ width: "64px", height: "64px", objectFit: "cover" }}
                 />
                 <div className="small mt-1">{img.angle}°</div>
+                {/* Nút download từng ảnh */}
+                <button
+                  onClick={() =>
+                    downloadSingleImage(img.data, img.angle, index)
+                  }
+                  className="btn btn-sm btn-outline-light position-absolute top-0 end-0"
+                  style={{ fontSize: "10px", padding: "2px 4px" }}
+                  title="Tải ảnh này"
+                >
+                  ⬇️
+                </button>
               </div>
             ))}
           </div>
