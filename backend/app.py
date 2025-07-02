@@ -115,9 +115,5 @@ def stitch_images():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("Starting Python Flask + OpenCV Backend...")
-    print("Backend will run at: http://localhost:5000")
-    print("Press Ctrl+C to stop")
-    print("=" * 50)
+    
     app.run(debug=True, host='0.0.0.0', port=5000)

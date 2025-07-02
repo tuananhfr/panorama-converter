@@ -18,7 +18,7 @@ const PanoramaStitcher = () => {
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const backendUrl = "http://localhost:5000";
+  const backendUrl = "https://panorama-converter.onrender.com/";
 
   // Camera capture directions
   const captureDirections = [
@@ -56,6 +56,8 @@ const PanoramaStitcher = () => {
 
   // Initialize camera
   const startCamera = async () => {
+    console.log("Starting camera...");
+
     try {
       // Check if getUserMedia is supported
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -63,55 +65,67 @@ const PanoramaStitcher = () => {
         return;
       }
 
+      // Show modal first for better UX
+      setShowCamera(true);
+      setIsCameraActive(true);
+      setCurrentStep(0);
+      setCapturedPhotos([]);
+
       // Try different camera configurations
       let mediaStream;
 
       try {
-        // First try: Back camera with high resolution
+        console.log("Trying back camera...");
+        // First try: Back camera with basic settings
         mediaStream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 1920, min: 640 },
-            height: { ideal: 1080, min: 480 },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
             facingMode: "environment",
           },
         });
       } catch (backCameraError) {
+        console.log("Back camera failed, trying front camera...");
         try {
           // Second try: Front camera
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: {
-              width: { ideal: 1280, min: 640 },
-              height: { ideal: 720, min: 480 },
+              width: { ideal: 640 },
+              height: { ideal: 480 },
               facingMode: "user",
             },
           });
         } catch (frontCameraError) {
+          console.log("Front camera failed, trying any camera...");
           // Third try: Any available camera with basic settings
           mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { min: 320, ideal: 640, max: 1920 },
-              height: { min: 240, ideal: 480, max: 1080 },
-            },
+            video: true,
           });
         }
       }
 
       if (videoRef.current && mediaStream) {
+        console.log("Setting video stream...");
         videoRef.current.srcObject = mediaStream;
-
-        // Wait for video to be ready
-        await new Promise((resolve) => {
-          videoRef.current.onloadedmetadata = resolve;
-        });
-
         setStream(mediaStream);
-        setIsCameraActive(true);
-        setCurrentStep(0);
-        setCapturedPhotos([]);
-        setShowCamera(true);
+
+        // Play video
+        try {
+          await videoRef.current.play();
+          console.log("Camera started successfully!");
+        } catch (playError) {
+          console.log("Video play error:", playError);
+        }
+      } else {
+        throw new Error("Không thể khởi tạo video element");
       }
     } catch (error) {
       console.error("Camera error:", error);
+
+      // Hide modal on error
+      setShowCamera(false);
+      setIsCameraActive(false);
+
       let errorMessage = "Không thể truy cập camera: ";
 
       if (error.name === "NotAllowedError") {
@@ -183,6 +197,9 @@ const PanoramaStitcher = () => {
   };
 
   const finishCapture = () => {
+    console.log("Finishing capture...");
+    console.log("Captured photos:", capturedPhotos);
+
     // Convert captured photos to the format expected by the stitching function
     const capturedImages = capturedPhotos.map((photo, index) => ({
       file: photo.file,
@@ -190,15 +207,34 @@ const PanoramaStitcher = () => {
       name: `captured_${index + 1}.jpg`,
     }));
 
+    console.log("Captured images:", capturedImages);
+    console.log("Current images before:", images);
+    console.log("Current previews before:", previews);
+
     // Add to existing images
-    setImages((prev) => [...prev, ...capturedImages]);
-    setPreviews((prev) => [
-      ...prev,
+    const newImages = [...images, ...capturedImages];
+    const newPreviews = [
+      ...previews,
       ...capturedPhotos.map((photo) => photo.preview),
-    ]);
+    ];
+
+    console.log("New images:", newImages);
+    console.log("New previews:", newPreviews);
+
+    setImages(newImages);
+    setPreviews(newPreviews);
 
     stopCamera();
-    alert(`Đã chụp xong ${capturedPhotos.length + 1} ảnh!`);
+
+    // Use setTimeout to ensure state has updated before showing alert
+    setTimeout(() => {
+      console.log("Images after update:", images);
+      alert(
+        `Đã chụp xong ${capturedPhotos.length + 1} ảnh! Tổng cộng: ${
+          newImages.length
+        } ảnh`
+      );
+    }, 100);
   };
 
   const retakePhoto = () => {
@@ -486,13 +522,19 @@ const PanoramaStitcher = () => {
         <div className="row mb-4">
           <div className="col-12 text-center">
             <button
-              className="btn btn-outline-primary btn-lg"
+              className="btn btn-outline-primary btn-lg me-2"
               onClick={startCamera}
               disabled={isCameraActive}
             >
               <i className="fas fa-camera me-2"></i>
               Chụp Ảnh Trực Tiếp
             </button>
+
+            {/* Debug Info */}
+            <small className="text-muted d-block mt-2">
+              Debug: showCamera={showCamera ? "true" : "false"}, isCameraActive=
+              {isCameraActive ? "true" : "false"}
+            </small>
           </div>
         </div>
 
@@ -564,37 +606,58 @@ const PanoramaStitcher = () => {
         {/* Action Buttons */}
         <div className="row mb-4">
           <div className="col-12 text-center">
-            <button
-              className="btn btn-primary btn-lg me-3"
-              onClick={buildPanorama}
-              disabled={
-                backendStatus !== "connected" ||
-                images.length < 2 ||
-                isProcessing
-              }
-            >
-              {isProcessing ? (
-                <>
-                  <span className="spinner-border spinner-border-sm me-2"></span>
-                  Building Panorama...
-                </>
-              ) : (
-                <>
-                  <i className="fas fa-magic me-1"></i>
-                  Build Panorama ({images.length} images)
-                </>
-              )}
-            </button>
+            {/* Debug Info */}
+            <div className="alert alert-info mb-3">
+              <strong>Debug Info:</strong>
+              <br />
+              Images length: {images.length}
+              <br />
+              Previews length: {previews.length}
+              <br />
+              Backend status: {backendStatus}
+              <br />
+              Is processing: {isProcessing ? "true" : "false"}
+              <br />
+              Show buttons: {images.length > 0 ? "YES" : "NO"}
+            </div>
 
-            {images.length > 0 && (
-              <button
-                className="btn btn-outline-secondary btn-lg"
-                onClick={clearAll}
-                disabled={isProcessing}
-              >
-                <i className="fas fa-trash me-1"></i>
-                Clear All
-              </button>
+            {images.length > 0 ? (
+              <>
+                <button
+                  className="btn btn-primary btn-lg me-3"
+                  onClick={buildPanorama}
+                  disabled={
+                    backendStatus !== "connected" ||
+                    images.length < 2 ||
+                    isProcessing
+                  }
+                >
+                  {isProcessing ? (
+                    <>
+                      <span className="spinner-border spinner-border-sm me-2"></span>
+                      Building Panorama...
+                    </>
+                  ) : (
+                    <>
+                      <i className="fas fa-magic me-1"></i>
+                      Build Panorama ({images.length} images)
+                    </>
+                  )}
+                </button>
+
+                <button
+                  className="btn btn-outline-secondary btn-lg"
+                  onClick={clearAll}
+                  disabled={isProcessing}
+                >
+                  <i className="fas fa-trash me-1"></i>
+                  Clear All
+                </button>
+              </>
+            ) : (
+              <p className="text-muted">
+                Cần ít nhất 1 ảnh để hiện button Build Panorama
+              </p>
             )}
           </div>
         </div>

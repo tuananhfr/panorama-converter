@@ -9,7 +9,7 @@ const PanoramaStitcher = () => {
   const [resultImage, setResultImage] = useState(null);
 
   const fileInputRef = useRef(null);
-  const backendUrl = "http://localhost:5000";
+  const backendUrl = "https://panorama-converter.onrender.com/";
 
   // Check backend status
   useEffect(() => {
