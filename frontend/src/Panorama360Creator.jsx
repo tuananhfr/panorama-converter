@@ -11,236 +11,20 @@ const PanoramaStitcher = () => {
   // Camera capture states
   const [showCamera, setShowCamera] = useState(false);
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [capturedPhotos, setCapturedPhotos] = useState([]);
   const [stream, setStream] = useState(null);
-  const [completedAngles, setCompletedAngles] = useState(new Set());
-
-  // Angle detection states
-  const [deviceOrientation, setDeviceOrientation] = useState({
-    alpha: 0,
-    beta: 0,
-    gamma: 0,
-  });
-  const [isCorrectAngle, setIsCorrectAngle] = useState(false);
-  const [angleWarning, setAngleWarning] = useState("");
-  const [orientationSupported, setOrientationSupported] = useState(false);
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const backendUrl = "https://panorama-converter.onrender.com/";
+  const backendUrl = "https://panorama-converter.onrender.com";
 
-  // 360° capture points - simplified for better angle detection
-  const captureAngles = [
-    {
-      id: 0,
-      name: "Bắc",
-      angle: 0,
-      x: 50,
-      y: 20,
-      instruction: "Hướng về phía Bắc",
-      tolerance: 20,
-    },
-    {
-      id: 1,
-      name: "Đông Bắc",
-      angle: 45,
-      x: 70,
-      y: 30,
-      instruction: "Xoay sang Đông Bắc 45°",
-      tolerance: 20,
-    },
-    {
-      id: 2,
-      name: "Đông",
-      angle: 90,
-      x: 80,
-      y: 50,
-      instruction: "Hướng về phía Đông",
-      tolerance: 20,
-    },
-    {
-      id: 3,
-      name: "Đông Nam",
-      angle: 135,
-      x: 70,
-      y: 70,
-      instruction: "Xoay sang Đông Nam 45°",
-      tolerance: 20,
-    },
-    {
-      id: 4,
-      name: "Nam",
-      angle: 180,
-      x: 50,
-      y: 80,
-      instruction: "Hướng về phía Nam",
-      tolerance: 20,
-    },
-    {
-      id: 5,
-      name: "Tây Nam",
-      angle: 225,
-      x: 30,
-      y: 70,
-      instruction: "Xoay sang Tây Nam 45°",
-      tolerance: 20,
-    },
-    {
-      id: 6,
-      name: "Tây",
-      angle: 270,
-      x: 20,
-      y: 50,
-      instruction: "Hướng về phía Tây",
-      tolerance: 20,
-    },
-    {
-      id: 7,
-      name: "Tây Bắc",
-      angle: 315,
-      x: 30,
-      y: 30,
-      instruction: "Xoay sang Tây Bắc 45°",
-      tolerance: 20,
-    },
-
-    // Tilted angles
-    {
-      id: 8,
-      name: "Nghiêng Lên",
-      angle: 0,
-      x: 50,
-      y: 10,
-      instruction: "Nghiêng camera lên 30°",
-      tolerance: 15,
-      tilt: "up",
-    },
-    {
-      id: 9,
-      name: "Nghiêng Xuống",
-      angle: 0,
-      x: 50,
-      y: 90,
-      instruction: "Nghiêng camera xuống 30°",
-      tolerance: 15,
-      tilt: "down",
-    },
-  ];
+  const MAX_IMAGES = 50;
+  const MIN_IMAGES = 2;
 
   // Check backend status
   useEffect(() => {
     checkBackendStatus();
-
-    // Check if device orientation is supported
-    if (window.DeviceOrientationEvent) {
-      setOrientationSupported(true);
-
-      // Request permission for iOS 13+
-      if (typeof DeviceOrientationEvent.requestPermission === "function") {
-        // This is iOS 13+ - permission will be requested when camera starts
-      } else {
-        // Android or older iOS - start listening immediately
-        startOrientationTracking();
-      }
-    }
   }, []);
-
-  // Device orientation tracking
-  const startOrientationTracking = () => {
-    const handleOrientation = (event) => {
-      setDeviceOrientation({
-        alpha: event.alpha || 0, // Z-axis (compass direction)
-        beta: event.beta || 0, // X-axis (tilt front/back)
-        gamma: event.gamma || 0, // Y-axis (tilt left/right)
-      });
-    };
-
-    window.addEventListener("deviceorientation", handleOrientation);
-
-    return () => {
-      window.removeEventListener("deviceorientation", handleOrientation);
-    };
-  };
-
-  // Check angle correctness
-  useEffect(() => {
-    if (!isCameraActive || !orientationSupported) return;
-
-    const currentAngle = captureAngles[currentStep];
-    const { alpha, beta } = deviceOrientation;
-
-    // Normalize compass direction (0-360)
-    const normalizedAlpha = alpha < 0 ? alpha + 360 : alpha;
-    const targetAngle = currentAngle.angle;
-
-    // Calculate angle difference
-    let angleDiff = Math.abs(normalizedAlpha - targetAngle);
-    if (angleDiff > 180) angleDiff = 360 - angleDiff;
-
-    // Check tilt for special angles
-    let tiltCorrect = true;
-    let tiltWarning = "";
-
-    if (currentAngle.tilt === "up") {
-      if (beta > -15) {
-        // Should tilt up (negative beta)
-        tiltCorrect = false;
-        tiltWarning = "Nghiêng camera lên nhiều hơn!";
-      }
-    } else if (currentAngle.tilt === "down") {
-      if (beta < 15) {
-        // Should tilt down (positive beta)
-        tiltCorrect = false;
-        tiltWarning = "Nghiêng camera xuống nhiều hơn!";
-      }
-    } else {
-      // Normal horizontal shots - should be relatively level
-      if (Math.abs(beta) > 20) {
-        tiltCorrect = false;
-        tiltWarning = "Giữ camera thẳng!";
-      }
-    }
-
-    // Determine if angle is correct
-    const angleCorrect = angleDiff <= currentAngle.tolerance;
-    const overallCorrect = angleCorrect && tiltCorrect;
-
-    setIsCorrectAngle(overallCorrect);
-
-    // Set warning messages
-    if (!overallCorrect) {
-      if (!angleCorrect && !tiltCorrect) {
-        setAngleWarning(
-          `${getDirectionWarning(
-            normalizedAlpha,
-            targetAngle
-          )} & ${tiltWarning}`
-        );
-      } else if (!angleCorrect) {
-        setAngleWarning(getDirectionWarning(normalizedAlpha, targetAngle));
-      } else if (!tiltCorrect) {
-        setAngleWarning(tiltWarning);
-      }
-    } else {
-      setAngleWarning("");
-    }
-  }, [deviceOrientation, currentStep, isCameraActive, orientationSupported]);
-
-  const getDirectionWarning = (current, target) => {
-    let diff = target - current;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-
-    if (Math.abs(diff) <= 20) return "";
-
-    if (diff > 0) {
-      return `Xoay phải ${Math.round(Math.abs(diff))}°`;
-    } else {
-      return `Xoay trái ${Math.round(Math.abs(diff))}°`;
-    }
-  };
 
   const checkBackendStatus = async () => {
     try {
@@ -262,62 +46,40 @@ const PanoramaStitcher = () => {
 
   // Initialize camera
   const startCamera = async () => {
-    console.log("Starting 360° camera...");
-
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         alert("Trình duyệt không hỗ trợ camera!");
         return;
       }
 
-      // Request orientation permission on iOS 13+
-      if (
-        orientationSupported &&
-        typeof DeviceOrientationEvent.requestPermission === "function"
-      ) {
-        try {
-          const permission = await DeviceOrientationEvent.requestPermission();
-          if (permission === "granted") {
-            startOrientationTracking();
-          } else {
-            alert("Cần quyền truy cập orientation để hướng dẫn góc chụp!");
-          }
-        } catch (error) {
-          console.error("Orientation permission error:", error);
-        }
+      if (images.length >= MAX_IMAGES) {
+        alert(`Đã đạt giới hạn ${MAX_IMAGES} ảnh!`);
+        return;
       }
 
       setShowCamera(true);
       setIsCameraActive(true);
-      setCurrentStep(0);
-      setCapturedPhotos([]);
-      setCompletedAngles(new Set());
-      setIsCorrectAngle(false);
-      setAngleWarning("");
 
       let mediaStream;
 
       try {
-        console.log("Trying back camera...");
         mediaStream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
             facingMode: "environment",
           },
         });
       } catch (backCameraError) {
-        console.log("Back camera failed, trying front camera...");
         try {
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: {
-              width: { ideal: 640 },
-              height: { ideal: 480 },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
               facingMode: "user",
             },
           });
         } catch (frontCameraError) {
-          console.log("Front camera failed, trying any camera...");
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: true,
           });
@@ -325,18 +87,14 @@ const PanoramaStitcher = () => {
       }
 
       if (videoRef.current && mediaStream) {
-        console.log("Setting video stream...");
         videoRef.current.srcObject = mediaStream;
         setStream(mediaStream);
 
         try {
           await videoRef.current.play();
-          console.log("360° Camera started successfully!");
         } catch (playError) {
           console.log("Video play error:", playError);
         }
-      } else {
-        throw new Error("Không thể khởi tạo video element");
       }
     } catch (error) {
       console.error("Camera error:", error);
@@ -346,12 +104,9 @@ const PanoramaStitcher = () => {
       let errorMessage = "Không thể truy cập camera: ";
 
       if (error.name === "NotAllowedError") {
-        errorMessage +=
-          "Bạn đã từ chối quyền truy cập camera. Vui lòng cho phép camera trong cài đặt trình duyệt.";
+        errorMessage += "Bạn đã từ chối quyền truy cập camera.";
       } else if (error.name === "NotFoundError") {
-        errorMessage += "Không tìm thấy camera nào trên thiết bị.";
-      } else if (error.name === "NotSupportedError") {
-        errorMessage += "Trình duyệt không hỗ trợ tính năng này.";
+        errorMessage += "Không tìm thấy camera nào.";
       } else if (error.name === "NotReadableError") {
         errorMessage += "Camera đang được sử dụng bởi ứng dụng khác.";
       } else {
@@ -369,15 +124,13 @@ const PanoramaStitcher = () => {
     }
     setIsCameraActive(false);
     setShowCamera(false);
-    setCurrentStep(0);
   };
 
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current) return;
 
-    // Check if angle is correct before capturing
-    if (!isCorrectAngle && orientationSupported) {
-      alert("⚠️ Chưa đúng góc! " + angleWarning);
+    if (images.length >= MAX_IMAGES) {
+      alert(`Đã đạt giới hạn ${MAX_IMAGES} ảnh!`);
       return;
     }
 
@@ -391,111 +144,34 @@ const PanoramaStitcher = () => {
 
     canvas.toBlob(
       (blob) => {
-        const file = new File(
-          [blob],
-          `panorama_${currentStep}_${Date.now()}.jpg`,
-          { type: "image/jpeg" }
-        );
+        const file = new File([blob], `photo_${Date.now()}.jpg`, {
+          type: "image/jpeg",
+        });
         const imageUrl = URL.createObjectURL(blob);
 
-        console.log(
-          `360° Photo captured: ${currentStep + 1}/${captureAngles.length}`,
-          captureAngles[currentStep].name
-        );
-
-        // Add to captured photos
-        const newCapturedPhoto = {
-          file,
-          preview: imageUrl,
-          angle: captureAngles[currentStep],
-          step: currentStep,
-        };
-
-        setCapturedPhotos((prev) => {
-          const updated = [...prev, newCapturedPhoto];
-          console.log("Captured photos updated:", updated.length);
-          return updated;
-        });
-
-        // Mark this angle as completed
-        setCompletedAngles((prev) => new Set([...prev, currentStep]));
-
-        // Add to main images and previews immediately
+        // Add to main images and previews
         const newImage = { file, element: null, name: file.name };
 
-        setImages((prev) => {
-          const updated = [...prev, newImage];
-          console.log("Images updated:", updated.length);
-          return updated;
-        });
+        setImages((prev) => [...prev, newImage]);
+        setPreviews((prev) => [...prev, imageUrl]);
 
-        setPreviews((prev) => {
-          const updated = [...prev, imageUrl];
-          console.log("Previews updated:", updated.length);
-          return updated;
-        });
-
-        // Reset angle checking for next step
-        setIsCorrectAngle(false);
-        setAngleWarning("");
-
-        // Move to next angle or finish
-        if (currentStep < captureAngles.length - 1) {
-          console.log(
-            `Moving to angle ${currentStep + 2}/${captureAngles.length}`
-          );
-          setCurrentStep(currentStep + 1);
-        } else {
-          console.log(`Completed all ${captureAngles.length} angles!`);
-          setTimeout(() => {
-            stopCamera();
-            alert(
-              `🎉 Hoàn thành chụp 360°! Đã chụp ${captureAngles.length} góc.`
-            );
-          }, 500);
-        }
+        console.log(`Photo captured. Total: ${images.length + 1}`);
       },
       "image/jpeg",
       0.9
     );
   };
 
-  const skipCurrentAngle = () => {
-    if (currentStep < captureAngles.length - 1) {
-      setCurrentStep(currentStep + 1);
-    } else {
-      stopCamera();
-      alert(
-        `Hoàn thành! Đã chụp ${completedAngles.size}/${captureAngles.length} góc.`
-      );
-    }
-  };
-
-  const retakePhoto = () => {
-    if (currentStep > 0) {
-      const prevStep = currentStep - 1;
-
-      // Remove the previous photo
-      setCapturedPhotos((prev) =>
-        prev.filter((photo) => photo.step !== prevStep)
-      );
-      setCompletedAngles((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(prevStep);
-        return newSet;
-      });
-
-      // Remove from main images
-      setImages((prev) => prev.slice(0, -1));
-      setPreviews((prev) => prev.slice(0, -1));
-
-      setCurrentStep(prevStep);
-    }
-  };
-
   // Handle file upload
   const handleFileSelect = (files) => {
     const fileArray = Array.from(files);
+
+    // Check if adding these files would exceed limit
+    if (images.length + fileArray.length > MAX_IMAGES) {
+      alert(`Chỉ có thể thêm tối đa ${MAX_IMAGES - images.length} ảnh nữa!`);
+      return;
+    }
+
     let loadedCount = 0;
     const newImages = [];
     const newPreviews = [];
@@ -548,8 +224,13 @@ const PanoramaStitcher = () => {
       return;
     }
 
-    if (images.length < 2) {
-      alert("Cần ít nhất 2 ảnh!");
+    if (images.length < MIN_IMAGES) {
+      alert(`Cần ít nhất ${MIN_IMAGES} ảnh để tạo panorama!`);
+      return;
+    }
+
+    if (images.length > MAX_IMAGES) {
+      alert(`Quá nhiều ảnh! Tối đa ${MAX_IMAGES} ảnh.`);
       return;
     }
 
@@ -597,7 +278,7 @@ const PanoramaStitcher = () => {
     if (resultImage) {
       const a = document.createElement("a");
       a.href = resultImage;
-      a.download = `panorama_360_${Date.now()}.jpg`;
+      a.download = `panorama_${Date.now()}.jpg`;
       a.click();
     }
   };
@@ -605,13 +286,15 @@ const PanoramaStitcher = () => {
   const clearAll = () => {
     setImages([]);
     setPreviews([]);
-    setCapturedPhotos([]);
-    setCompletedAngles(new Set());
     setResultReady(false);
     setResultImage(null);
-    setCurrentStep(0);
     stopCamera();
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeImage = (index) => {
+    setImages((prev) => prev.filter((_, i) => i !== index));
+    setPreviews((prev) => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -629,7 +312,7 @@ const PanoramaStitcher = () => {
         {/* Header */}
         <div className="row mb-4">
           <div className="col-12 text-center">
-            <h1 className="h2 mb-3">🌐 Panorama 360° Stitcher</h1>
+            <h1 className="h2 mb-3">📸 Panorama Stitcher</h1>
             <div>
               <span
                 className={`badge ${
@@ -639,172 +322,62 @@ const PanoramaStitcher = () => {
                 {backendStatus === "connected" ? "Connected" : "Offline"}
               </span>
               <span className="badge bg-secondary me-2">
-                {images.length} images
+                {images.length}/{MAX_IMAGES} images
               </span>
-              <span className="badge bg-info">
-                {completedAngles.size}/{captureAngles.length} angles
-              </span>
+              {images.length >= MIN_IMAGES && (
+                <span className="badge bg-info">Ready to build</span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* 360° Camera Modal */}
+        {/* Camera Modal */}
         {showCamera && (
           <div
             className="modal show d-block"
-            style={{ backgroundColor: "rgba(0,0,0,0.9)", zIndex: 1060 }}
+            style={{ backgroundColor: "rgba(0,0,0,0.8)", zIndex: 1060 }}
           >
-            <div className="modal-dialog modal-fullscreen">
-              <div className="modal-content bg-dark">
-                <div className="modal-header border-secondary">
-                  <h5 className="modal-title text-white">
-                    📸 Chụp Panorama 360° - {captureAngles[currentStep].name}
+            <div className="modal-dialog modal-lg">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <h5 className="modal-title">
+                    📷 Chụp Ảnh ({images.length}/{MAX_IMAGES})
                   </h5>
                   <button
                     type="button"
-                    className="btn-close btn-close-white"
+                    className="btn-close"
                     onClick={stopCamera}
                   ></button>
                 </div>
-                <div
-                  className="modal-body p-0 position-relative"
-                  style={{ height: "calc(100vh - 120px)" }}
-                >
-                  {/* Camera View - No overlay */}
+                <div className="modal-body p-0">
                   <video
                     ref={videoRef}
                     autoPlay
                     playsInline
-                    className="w-100 h-100"
-                    style={{ objectFit: "cover" }}
+                    className="w-100"
+                    style={{ height: "400px", objectFit: "cover" }}
                   />
-
-                  {/* Simple Guidance Overlay */}
-                  <div className="position-absolute top-0 start-0 w-100 p-3">
-                    {/* Current instruction card */}
-                    <div className="card bg-dark bg-opacity-75 text-white border-0 mb-3">
-                      <div className="card-body py-2 px-3">
-                        <div className="d-flex align-items-center justify-content-between">
-                          <div>
-                            <h6 className="mb-1 text-warning">
-                              {captureAngles[currentStep].name}
-                            </h6>
-                            <small>
-                              {captureAngles[currentStep].instruction}
-                            </small>
-                          </div>
-                          <span className="badge bg-primary">
-                            {currentStep + 1}/{captureAngles.length}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Angle status */}
-                    {orientationSupported && (
-                      <div className="card bg-dark bg-opacity-75 text-white border-0">
-                        <div className="card-body py-2 px-3">
-                          {isCorrectAngle ? (
-                            <div className="d-flex align-items-center text-success">
-                              <i className="fas fa-check-circle me-2"></i>
-                              <span>
-                                <strong>✅ Đúng góc! Có thể chụp</strong>
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="d-flex align-items-center text-warning">
-                              <i className="fas fa-exclamation-triangle me-2"></i>
-                              <span>
-                                <strong>
-                                  ⚠️ {angleWarning || "Điều chỉnh góc camera"}
-                                </strong>
-                              </span>
-                            </div>
-                          )}
-
-                          {/* Compact debug info */}
-                          <small className="text-muted d-block mt-1">
-                            Hướng: {Math.round(deviceOrientation.alpha)}° |
-                            Nghiêng: {Math.round(deviceOrientation.beta)}°
-                          </small>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Progress indicators - bottom right */}
-                  <div className="position-absolute bottom-0 end-0 p-3">
-                    <div className="d-flex flex-column gap-1">
-                      {captureAngles.map((_, index) => (
-                        <div
-                          key={index}
-                          className={`rounded-circle ${
-                            completedAngles.has(index)
-                              ? "bg-success"
-                              : index === currentStep
-                              ? "bg-warning"
-                              : "bg-secondary bg-opacity-50"
-                          }`}
-                          style={{ width: "12px", height: "12px" }}
-                          title={captureAngles[index].name}
-                        ></div>
-                      ))}
-                    </div>
-                  </div>
                 </div>
-
-                <div className="modal-footer border-secondary">
-                  <div className="d-flex justify-content-between w-100">
-                    <button
-                      type="button"
-                      className="btn btn-outline-light"
-                      onClick={retakePhoto}
-                      disabled={currentStep === 0}
-                    >
-                      <i className="fas fa-undo me-1"></i>
-                      Chụp Lại
-                    </button>
-
-                    <div className="d-flex gap-2">
-                      <button
-                        type="button"
-                        className="btn btn-outline-secondary"
-                        onClick={skipCurrentAngle}
-                      >
-                        <i className="fas fa-forward me-1"></i>
-                        Bỏ Qua
-                      </button>
-                      <button
-                        type="button"
-                        className={`btn btn-lg ${
-                          isCorrectAngle ? "btn-success" : "btn-outline-success"
-                        }`}
-                        onClick={capturePhoto}
-                        disabled={!isCorrectAngle && orientationSupported}
-                      >
-                        <i className="fas fa-camera me-1"></i>
-                        {isCorrectAngle ? (
-                          <>
-                            ✅ Chụp ({currentStep + 1}/{captureAngles.length})
-                          </>
-                        ) : (
-                          <>
-                            ⚠️ Chờ đúng góc ({currentStep + 1}/
-                            {captureAngles.length})
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      onClick={stopCamera}
-                    >
-                      <i className="fas fa-times me-1"></i>
-                      Dừng
-                    </button>
-                  </div>
+                <div className="modal-footer">
+                  <button
+                    type="button"
+                    className="btn btn-success btn-lg"
+                    onClick={capturePhoto}
+                    disabled={images.length >= MAX_IMAGES}
+                  >
+                    <i className="fas fa-camera me-1"></i>
+                    {images.length >= MAX_IMAGES
+                      ? `Đã đủ ${MAX_IMAGES} ảnh`
+                      : "Chụp"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={stopCamera}
+                  >
+                    <i className="fas fa-times me-1"></i>
+                    Xong
+                  </button>
                 </div>
               </div>
             </div>
@@ -819,15 +392,30 @@ const PanoramaStitcher = () => {
               style={{
                 borderColor: "#dee2e6",
                 backgroundColor: "#f8f9fa",
-                cursor: "pointer",
+                cursor: images.length >= MAX_IMAGES ? "not-allowed" : "pointer",
+                opacity: images.length >= MAX_IMAGES ? 0.6 : 1,
               }}
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => {
+                if (images.length < MAX_IMAGES) {
+                  fileInputRef.current?.click();
+                }
+              }}
               onDragOver={onDragOver}
               onDrop={onDrop}
             >
               <i className="fas fa-images fa-3x text-muted mb-3"></i>
-              <h5 className="text-muted">Add Images</h5>
-              <p className="text-muted">Click or drag & drop multiple images</p>
+              <h5 className="text-muted">
+                {images.length >= MAX_IMAGES
+                  ? `Đã đủ ${MAX_IMAGES} ảnh`
+                  : "Add Images"}
+              </h5>
+              <p className="text-muted">
+                {images.length >= MAX_IMAGES
+                  ? "Không thể thêm ảnh nữa"
+                  : `Click hoặc kéo thả ảnh (còn lại: ${
+                      MAX_IMAGES - images.length
+                    })`}
+              </p>
             </div>
             <input
               type="file"
@@ -836,82 +424,26 @@ const PanoramaStitcher = () => {
               accept="image/*"
               multiple
               onChange={onFileChange}
+              disabled={images.length >= MAX_IMAGES}
             />
           </div>
         </div>
 
-        {/* Camera Button - Separate Row */}
+        {/* Camera Button */}
         <div className="row mb-4">
           <div className="col-12 text-center">
             <button
-              className="btn btn-primary btn-lg me-2"
+              className="btn btn-primary btn-lg"
               onClick={startCamera}
-              disabled={isCameraActive}
+              disabled={isCameraActive || images.length >= MAX_IMAGES}
             >
-              <i className="fas fa-globe me-2"></i>
-              Chụp Panorama 360°
+              <i className="fas fa-camera me-2"></i>
+              {images.length >= MAX_IMAGES
+                ? `Đã đủ ${MAX_IMAGES} ảnh`
+                : "Chụp Thêm Ảnh"}
             </button>
           </div>
         </div>
-
-        {/* 360° Progress Summary */}
-        {capturedPhotos.length > 0 && (
-          <div className="row mb-4">
-            <div className="col-12">
-              <div className="card">
-                <div className="card-header">
-                  <h6 className="mb-0">
-                    <i className="fas fa-globe text-success me-1"></i>
-                    Tiến Trình 360° ({completedAngles.size}/
-                    {captureAngles.length} góc)
-                  </h6>
-                </div>
-                <div className="card-body">
-                  <div className="row g-2">
-                    {capturedPhotos.map((photo, index) => (
-                      <div key={index} className="col-6 col-md-3 col-lg-2">
-                        <div className="position-relative">
-                          <img
-                            src={photo.preview}
-                            className="w-100 rounded"
-                            style={{ aspectRatio: "4/3", objectFit: "cover" }}
-                            alt={photo.angle.name}
-                          />
-                          <div className="position-absolute top-0 start-0 m-1">
-                            <span className="badge bg-success">
-                              {photo.angle.name}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Progress Bar */}
-                  <div className="mt-3">
-                    <div className="progress">
-                      <div
-                        className="progress-bar bg-success"
-                        style={{
-                          width: `${
-                            (completedAngles.size / captureAngles.length) * 100
-                          }%`,
-                        }}
-                      ></div>
-                    </div>
-                    <small className="text-muted">
-                      Hoàn thành:{" "}
-                      {Math.round(
-                        (completedAngles.size / captureAngles.length) * 100
-                      )}
-                      %
-                    </small>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Image Previews */}
         {previews.length > 0 && (
@@ -919,24 +451,29 @@ const PanoramaStitcher = () => {
             <div className="col-12">
               <h6>
                 <i className="fas fa-images me-1"></i>
-                Tất cả ảnh ({previews.length})
+                Ảnh đã chọn ({previews.length}/{MAX_IMAGES})
               </h6>
-              <div className="d-flex flex-wrap gap-3">
+              <div className="row g-3">
                 {previews.map((preview, index) => (
-                  <div key={index} className="position-relative">
-                    <img
-                      src={preview}
-                      style={{
-                        width: "120px",
-                        height: "80px",
-                        objectFit: "cover",
-                        borderRadius: "8px",
-                      }}
-                      alt={`Image ${index + 1}`}
-                    />
-                    <span className="position-absolute top-0 start-0 bg-primary text-white px-2 py-1 rounded-end">
-                      {index + 1}
-                    </span>
+                  <div key={index} className="col-6 col-md-4 col-lg-3">
+                    <div className="position-relative">
+                      <img
+                        src={preview}
+                        className="w-100 rounded"
+                        style={{ aspectRatio: "4/3", objectFit: "cover" }}
+                        alt={`Image ${index + 1}`}
+                      />
+                      <span className="position-absolute top-0 start-0 bg-primary text-white px-2 py-1 rounded-end">
+                        {index + 1}
+                      </span>
+                      <button
+                        className="position-absolute top-0 end-0 btn btn-danger btn-sm m-1"
+                        onClick={() => removeImage(index)}
+                        style={{ padding: "2px 6px" }}
+                      >
+                        <i className="fas fa-times"></i>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -953,19 +490,20 @@ const PanoramaStitcher = () => {
                 onClick={buildPanorama}
                 disabled={
                   backendStatus !== "connected" ||
-                  images.length < 2 ||
+                  images.length < MIN_IMAGES ||
+                  images.length > MAX_IMAGES ||
                   isProcessing
                 }
               >
                 {isProcessing ? (
                   <>
                     <span className="spinner-border spinner-border-sm me-2"></span>
-                    Building 360° Panorama...
+                    Building Panorama...
                   </>
                 ) : (
                   <>
                     <i className="fas fa-magic me-1"></i>
-                    Build 360° Panorama ({images.length} images)
+                    Build Panorama ({images.length} images)
                   </>
                 )}
               </button>
@@ -982,6 +520,29 @@ const PanoramaStitcher = () => {
           </div>
         )}
 
+        {/* Validation Messages */}
+        {images.length > 0 && images.length < MIN_IMAGES && (
+          <div className="row mb-3">
+            <div className="col-12">
+              <div className="alert alert-warning">
+                <i className="fas fa-exclamation-triangle me-1"></i>
+                Cần thêm {MIN_IMAGES - images.length} ảnh nữa để tạo panorama
+              </div>
+            </div>
+          </div>
+        )}
+
+        {images.length > MAX_IMAGES && (
+          <div className="row mb-3">
+            <div className="col-12">
+              <div className="alert alert-danger">
+                <i className="fas fa-times-circle me-1"></i>
+                Quá nhiều ảnh! Xóa {images.length - MAX_IMAGES} ảnh để tiếp tục
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Result */}
         {resultReady && resultImage && (
           <div className="row">
@@ -990,7 +551,7 @@ const PanoramaStitcher = () => {
                 <div className="card-header d-flex justify-content-between align-items-center">
                   <h5 className="mb-0">
                     <i className="fas fa-check-circle text-success me-1"></i>
-                    Panorama 360° Result
+                    Panorama Result
                   </h5>
                   <button
                     className="btn btn-success btn-sm"
@@ -1008,7 +569,7 @@ const PanoramaStitcher = () => {
                       height: "auto",
                       borderRadius: "8px",
                     }}
-                    alt="Panorama 360° Result"
+                    alt="Panorama Result"
                   />
                 </div>
               </div>
@@ -1033,31 +594,9 @@ const PanoramaStitcher = () => {
           </div>
         )}
 
-        {/* Hidden Canvas for Photo Capture */}
+        {/* Hidden Canvas */}
         <canvas ref={canvasRef} style={{ display: "none" }} />
       </div>
-
-      {/* CSS for pulse animation */}
-      <style>{`
-        .pulse {
-          animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-          0% {
-            transform: scale(1);
-            opacity: 1;
-          }
-          50% {
-            transform: scale(1.1);
-            opacity: 0.7;
-          }
-          100% {
-            transform: scale(1);
-            opacity: 1;
-          }
-        }
-      `}</style>
     </>
   );
 };
