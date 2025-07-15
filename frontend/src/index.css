@@ -1,0 +1,13 @@
+.panorama-control-btn {
+  transition: all 0.2s ease;
+}
+
+.panorama-control-btn:hover {
+  background-color: var(--bs-primary) !important;
+  color: white !important;
+  transform: scale(1.2);
+}
+
+.panorama-control-btn i {
+  transition: transform 0.2s ease;
+}
